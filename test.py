@@ -13,12 +13,23 @@ import time
 from tqdm import tqdm
 import acc
 from othermodels.MSCD_v4 import MSCDNet
-
+from model.FDAFFNet import FDAFFNet,FDDAFFNet_X
+from othermodels.DSIFN_CD import DSIFN
+from othermodels.siamunet_diff import SiamUnet_diff
+from othermodels.siamunet_conc import SiamUnet_conc
 # --------- 1. get image path and name ---------
-img_a_dirs = ["dataset\\train\\A"]
-img_b_dirs = ["dataset\\train\\B"]
-label_dirs = ["dataset\\train\\label"]
-output_dir = ["dataset\\train\\pred"]
+'''
+img_a_dirs = ["BCD_\\val\\A"]
+img_b_dirs = ["BCD_\\val\\B"]
+label_dirs = ["BCD_\\val\\label"]
+output_dir = ["BCD_\\val\\pred"]
+
+'''
+img_a_dirs = ["Levir_CD_256\\test\\A"]
+img_b_dirs = ["Levir_CD_256\\test\\B"]
+label_dirs = ["Levir_CD_256\\test\\label"]
+output_dir = ["Levir_CD_256\\test\\DSIFNpred"]
+
 img_num = len(img_a_dirs)
 image_ext = ".png"
 label_ext = ".png"
@@ -58,23 +69,20 @@ for i in range(img_num):
 
     # --------- 3. model define ---------
     print("...load Model...")
+
+    net = FDDAFFNet_X()
+    #net = DSIFN()
+    #model_dir = r'E:\pwg\FDDAFFNet\weights\polyu\Levir_cd\Mine_l_C3\epoch_ 77_best_loss_loss_0.293974_iou_0.852902.pth'
+    model_dir = r'weights\polyu\Levir_cd\ourx\epoch_ 46_best_loss_loss_0.429331_iou_85.724471.pth'
     '''
-    net = MCDONet_Seg_v6()
-    model_dir = 'E:/PWG/MCDONet/weights/polyu/0315/v6/epoch_ 75_best_loss_loss_1.561680_iou_71.492598.pth'
+    model_dir = r'E:\pwg\FDDAFFNet\weights\polyu\Levir_cd\Mine_2\epoch_ 25_best_loss_loss_2.322033_iou_84.540904.pth'
     pre_model = torch.load(model_dir)
     model2_dict = net.state_dict()
     state_dict = {k: v for k, v in pre_model.items() if k in model2_dict.keys()}
     model2_dict.update(state_dict)
     net.load_state_dict(model2_dict)
     '''
-    net = MSCDNet(3,1)
-    model_dir = 'E:/PWG/MCDONet/weights/polyu/0313/MsCDNet/netCD_epoch_44_val_iou_0.8428.pth'
-    pre_model = torch.load(model_dir)
-    model2_dict = net.state_dict()
-    state_dict = {k: v for k, v in pre_model.items() if k in model2_dict.keys()}
-    model2_dict.update(state_dict)
-    net.load_state_dict(model2_dict)
-    # net.load_state_dict(torch.load(model_dir))
+    net.load_state_dict(torch.load(model_dir))
     if torch.cuda.is_available():
         net.cuda()
     net.eval()
@@ -104,18 +112,29 @@ for i in range(img_num):
         d1, d2, d3, d4 = net(inputs_va,inputs_va)
         loss = muti_structure_loss_fusion(d1, d2, d3, d4, labels_v)
         '''
-        #at1, at2, at3, d1, d2, d3, d4 = net(inputs_va, inputs_vb)
-        #y_pb = d4[:, 0, :, :]
+        #----------DSIFN-------
+        '''
+        d1, d2, d3, d4, d5 = net(inputs_va, inputs_vb)
+        y_pb = d1[:, 0, :, :]'''
+        #----------FDDAFFNET--------
+
+        #at1,at2,at3,at4,d1,d2,d3,d4,dout = net(inputs_va, inputs_vb)
+        d1, d2, d3,d4, dout = net(inputs_va, inputs_vb)
+        y_pb = dout[:, 0, :, :]
+
+        # ----------MSCDNet---------
+        '''
         CD_final, d1, d2, d3, d4, d5 = net(inputs_va, inputs_vb)
-        y_pb = CD_final[:, 0, :, :]
-        y_pb = torch.ge(y_pb, 0.5).float()
+        y_pb = CD_final[:, 0, :, :]'''
+        sigmoid = torch.nn.Sigmoid()
+        y_pb = torch.ge(sigmoid(y_pb), 0.39).float()
         pred = y_pb.cpu().detach().numpy()
         ans = pred[0]
-        cv2.imwrite(test_a_name_list[num].replace(".tif", ".png").replace("A", "pred"), ans * 255)
+        #cv2.imwrite(test_a_name_list[num].replace("\\A\\", "\\MINEpred\\"), ans * 255)
         hist_t = acc.hist(labels_v.cpu().detach().numpy(), pred)
         hists = hists + hist_t
         num = num + 1
-        del d1, d2, d3, d4, y_pb, pred, hist_t
+        del d1, d2, d3,d4, dout, y_pb, pred, hist_t
         #del d1, d2, d3, d4, y_pb,CD_final, pred, hist_t
 
     recall, precision, iou, f1measure, accuray = acc.show_cd_rpqf1_pixel(hists)

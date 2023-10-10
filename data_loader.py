@@ -6,6 +6,8 @@ from skimage import io, transform, color
 import numpy as np
 import math
 #import matplotlib.pyplot as plt
+
+import random
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, utils
 from PIL import Image
@@ -105,18 +107,75 @@ class RandomCrop(object):
 			assert len(output_size) == 2
 			self.output_size = output_size
 	def __call__(self,sample):
-		image, label = sample['image'], sample['label']
+		# image, label = sample['image'], sample['label']
+		imageA, imageB, label = sample['image_a'],sample['image_b'],sample['label']
 
-		h, w = image.shape[:2]
+		h, w = imageA.shape[:2]
 		new_h, new_w = self.output_size
 
 		top = np.random.randint(0, h - new_h)
 		left = np.random.randint(0, w - new_w)
 
-		image = image[top: top + new_h, left: left + new_w]
+		imageA = imageA[top: top + new_h, left: left + new_w]
+		imageB = imageB[top: top + new_h, left: left + new_w]
 		label = label[top: top + new_h, left: left + new_w]
 
-		return {'image': image, 'label': label}
+		# return {'image': image, 'label': label}
+		return {'image_a': imageA,'image_b': imageB, 'label': label}
+
+class Randomflip(object):
+
+	def __init__(self,p):
+		self.p = p
+	def __call__(self,sample):
+		# image, label = sample['image'], sample['label']
+		imageA, imageB, label = sample['image_a'],sample['image_b'],sample['label']
+		seed_f = np.random.random()
+		seed_x = np.random.random()
+		if seed_f > self.p:
+			if seed_x >0.5:
+				imageA = cv2.flip(imageA, 0)
+				imageB = cv2.flip(imageB, 0)
+				label = cv2.flip(label, 0)
+			else:
+				imageA = cv2.flip(imageA, 1)
+				imageB = cv2.flip(imageB, 1)
+				label = cv2.flip(label, 1)
+		# return {'image': image, 'label': label}
+		return {'image_a': imageA,'image_b': imageB, 'label': label}
+
+class RandomCut(object):
+
+	def __init__(self,p,number):
+		self.p = p
+		self.number = number
+	def __call__(self,sample):
+		# image, label = sample['image'], sample['label']
+		imageA, imageB, label = sample['image_a'],sample['image_b'],sample['label']
+		seed_f = np.random.random()
+		size = (int)(label.shape[1] / 16)
+
+		if seed_f > self.p:
+			for i in range(0,self.number):
+				l_x = random.randint(0, label.shape[1] - size)
+				l_y = random.randint(0, label.shape[1] - size)
+				imageA[l_x:l_x+size,l_y:l_y+size,: ] = 0
+				imageB[l_x:l_x + size, l_y:l_y + size, :] = 0
+				label[l_x:l_x + size, l_y:l_y + size] = 0
+		# return {'image': image, 'label': label}
+		return {'image_a': imageA,'image_b': imageB, 'label': label}
+
+class Randomcov(object):
+	def __init__(self,p):
+		self.p = p
+	def __call__(self,sample):
+		# image, label = sample['image'], sample['label']
+		imageA, imageB, label = sample['image_a'], sample['image_b'], sample['label']
+		seed_f = np.random.random()
+		if seed_f > self.p:
+			return {'image_a': imageB, 'image_b': imageA, 'label': label}
+		else:
+			return {'image_a': imageA, 'image_b': imageB, 'label': label}
 
 # class ToTensor(object):
 # 	"""Convert ndarrays in sample to Tensors."""
@@ -275,7 +334,7 @@ class ToTensor(object):
 		image_a, image_b, label = sample['image_a'], sample['image_b'], sample['label']
 		tmpImg_a = np.zeros((image_a.shape[0],image_a.shape[1],3))
 		tmpImg_b = np.zeros((image_b.shape[0], image_b.shape[1], 3))
-		tmpLbl = np.zeros(label.shape)
+		tmpLbl = np.zeros((label.shape[0], label.shape[1], 1))
 
 		# tmpImg = (image / 255).transpose((2, 0, 1))
 		# tmpLbl = label.transpose((2, 0, 1))
@@ -286,7 +345,9 @@ class ToTensor(object):
 			label = label
 		else:
 			label = label/np.max(label)
-
+		if len(label.shape) ==2:
+			tmpLbl[:, :, 0] = label
+			label = tmpLbl
 		# if image.shape[2]==1:
 		# 	tmpImg[:,:,0] = (image[:,:,0]-0.485)/0.229
 		# 	tmpImg[:,:,1] = (image[:,:,0]-0.485)/0.229
@@ -309,9 +370,6 @@ class ToTensor(object):
 			'label': torch.from_numpy(tmpLbl)}
 class SalObjDataset(Dataset):
 	def __init__(self,img_a_list,img_b_list,lbl_name_list,transform=None):
-		# self.root_dir = root_dir
-		# self.image_name_list = glob.glob(image_dir+'*.png')
-		# self.label_name_list = glob.glob(label_dir+'*.png')
 		self.image_a_list = img_a_list
 		self.image_b_list = img_b_list
 		self.label_name_list = lbl_name_list
