@@ -12,7 +12,7 @@ import time
 def getdist(feature_1,feature_2 ,ca):
     ing = feature_1 - feature_2 + 0.00001
     ing = torch.pow(ing,2) * ca
-    ing = torch.sqrt(torch.sum(ing,dim=1,keepdim=True)) / feature_1.shape[1]
+    ing = torch.sqrt(torch.sum(ing,dim=3,keepdim=True)) / feature_1.shape[1]
     return ing
 def autopad(k, p=None):  # kernel, padding
     # Pad to 'same'
@@ -55,7 +55,7 @@ class ConvBnRelu(nn.Module):
         if self.has_relu:
             self.relu = nn.PReLU()
         if self.has_drop:
-            self.drop = nn.Dropout(p=0.5)
+            self.drop = nn.Dropout(p=0.6)
     def forward(self, x):
         x = self.conv(x)
         if self.has_bn:
@@ -278,7 +278,12 @@ class FDAFFM(nn.Module):
         self.sigmoid = torch.tanh
     def forward(self, x1,x2):
         ca = self.ca(x1,x2)
-        da = self.atres(self.sigmoid(getdist(x1, x2, ca)))
+        x1 = ca * x1
+        x2 = ca * x2
+        x= F.pairwise_distance(x1,x2,p=2).unsqueeze(1)
+        da = self.atres(self.sigmoid(x)
+                        )
+        #da = self.atres(self.sigmoid(getdist(x1, x2, ca)))
         #x = self.concat(
         #    [da * torch.abs(x1 - x2)
         #        ,  da * (x1 + x2)])
@@ -286,6 +291,85 @@ class FDAFFM(nn.Module):
         x = self.relu(x + self.conv3(self.conv2(self.conv1(self.relu(self.bn1(x))))))
         x = self.sa(x) * x
         return x
+class FDAFFM_outputda(nn.Module):
+    def __init__(self, in_planes, ratio = 4 , kernel_size = 3):
+        super(FDAFFM_outputda, self).__init__()
+        self.ca = ChannelAttention(in_planes, ratio)
+        self.sa = SpatialAttention(kernel_size)
+        self.concat = Concat(1)
+        self.atres = Resblock(1, 3, 1, 1)
+        self.conv1 = ConvBnRelu(in_planes*2, in_planes, 1, 1, 0)
+        self.conv2 = ConvBnRelu(in_planes, in_planes, 3, 1, 1)
+        self.conv3 = nn.Conv2d(in_planes, in_planes*2,kernel_size=1,
+                              stride=1, padding=0)
+        self.bn1 = nn.BatchNorm2d(in_planes*2, eps=1e-5)
+        self.relu = nn.PReLU()
+        self.sigmoid = torch.tanh
+    def forward(self, x1,x2):
+        ca = self.ca(x1,x2)
+        x1 = ca * x1
+        x2 = ca * x2
+        x= F.pairwise_distance(x1,x2,p=3).unsqueeze(1)
+        da = self.atres(self.sigmoid(x)
+                        )
+        #da = self.atres(self.sigmoid(getdist(x1, x2, ca)))
+        #x = self.concat(
+        #    [da * torch.abs(x1 - x2)
+        #        ,  da * (x1 + x2)])
+        x = da * self.concat([x1,x2])
+        x = self.relu(x + self.conv3(self.conv2(self.conv1(self.relu(self.bn1(x))))))
+        x = self.sa(x) * x
+        return da,x
+class FDAFFM_v2_p1(nn.Module):
+    def __init__(self, in_planes, ratio = 4 , kernel_size = 3):
+        super(FDAFFM_v2_p1, self).__init__()
+        self.ca = ChannelAttention(in_planes, ratio)
+        self.concat = Concat(1)
+        self.atres = Resblock(1, 3, 1, 1)
+        self.trans_conv1 = nn.ConvTranspose2d(in_planes, in_planes, kernel_size=2, stride=2)
+        self.trans_conv2 = nn.ConvTranspose2d(in_planes * 2, in_planes, kernel_size=4, stride=4)
+        self.trans_conv3 = nn.ConvTranspose2d(in_planes * 2, in_planes, kernel_size=8, stride=8)
+        self.integration = ConvBnRelu(in_planes * 3, in_planes, 1, 1, 0)
+        self.sigmoid = torch.tanh
+        self.da_out = nn.ConvTranspose2d(1, 1, kernel_size=2, stride=2)
+    def forward(self, x1_s3, x1_s4, x1_s5, x2_s3, x2_s4, x2_s5):
+        x1_s3 = self.trans_conv1(x1_s3)
+        x1_s4 = self.trans_conv2(x1_s4)
+        x1_s5 = self.trans_conv3(x1_s5)
+        x2_s3 = self.trans_conv1(x2_s3)
+        x2_s4 = self.trans_conv2(x2_s4)
+        x2_s5 = self.trans_conv3(x2_s5)
+        x1 = self.concat([x1_s3, x1_s4, x1_s5])
+        x2 = self.concat([x2_s3, x2_s4, x2_s5])
+        x1 = self.integration(x1)
+        x2 = self.integration(x2)
+        ca = self.ca(x1,x2)
+        da = self.atres(self.sigmoid(getdist(x1, x2, ca)))
+        #x = self.concat(
+        #    [da * torch.abs(x1 - x2)
+        #        ,  da * (x1 + x2)])
+        # x = da * self.concat([x1,x2])
+        # x = self.relu(x + self.conv3(self.conv2(self.conv1(self.relu(self.bn1(x))))))
+        # x = self.sa(x) * x
+        return self.da_out(da)
+class FDAFFM_v2_p2(nn.Module):
+    def __init__(self, in_planes, ratio = 4 , kernel_size = 3):
+        super(FDAFFM_v2_p2, self).__init__()
+        self.sa = SpatialAttention(kernel_size)
+        self.concat = Concat(1)
+        self.conv1 = ConvBnRelu(in_planes*2, in_planes, 1, 1, 0)
+        self.conv2 = ConvBnRelu(in_planes, in_planes, 3, 1, 1)
+        self.conv3 = nn.Conv2d(in_planes, in_planes*2,kernel_size=1,
+                              stride=1, padding=0)
+        self.bn1 = nn.BatchNorm2d(in_planes*2, eps=1e-5)
+        self.relu = nn.PReLU()
+    def forward(self, x1,x2,da):
+        x = da * self.concat([x1,x2])
+        x = self.relu(x + self.conv3(self.conv2(self.conv1(self.relu(self.bn1(x))))))
+        x = self.sa(x) * x
+        return x
+
+
 class Decoder(nn.Module):
     def __init__(self, in_planes):
         super(Decoder, self).__init__()
@@ -395,6 +479,61 @@ class Decoder_2(nn.Module):
         d4_out = self.outside_4(self.upscore4(d4))
         dout = self.decoder_out(self.trans_conv4(self.decoder_t5_3(
             self.decoder_t5_2(self.decoder_t5_1(self.concat([self.trans_conv3(d4), out[0]]))))))
+        return d1_out,d2_out,d3_out,d4_out,dout
+class Decoder_3(nn.Module):
+    def __init__(self, in_planes,class_num = 1):
+        super(Decoder_3, self).__init__()
+        self.decoder_t1_1 = ConvBnRelu(in_planes, in_planes // 2, 3, 1, 1, has_drop=True)
+        self.decoder_t1_2 = ConvBnRelu(in_planes // 2, in_planes // 2, 3, 1, 1, has_drop=True)
+        self.decoder_t1_3 = ConvBnRelu(in_planes // 2, in_planes // 2, 3, 1, 1)
+
+        self.decoder_t2_1 = ConvBnRelu(in_planes+in_planes // 2, in_planes // 2, 3, 1, 1, has_drop=True)
+        self.decoder_t2_2 = ConvBnRelu(in_planes // 2, in_planes // 2, 3, 1, 1, has_drop=True)
+        self.decoder_t2_3 = ConvBnRelu(in_planes // 2, in_planes // 2, 3, 1, 1)
+
+        self.decoder_t3_1 = ConvBnRelu(in_planes, in_planes//2, 3, 1, 1, has_drop=True)
+        self.decoder_t3_2 = ConvBnRelu( in_planes//2,  in_planes//4, 3, 1, 1, has_drop=True)
+        self.decoder_t3_3 = ConvBnRelu(in_planes//4, in_planes//4, 3, 1, 1)
+
+        self.decoder_t4_1 = ConvBnRelu(in_planes//2, in_planes//2, 3, 1, 1, has_drop=True)
+        self.decoder_t4_2 = ConvBnRelu(in_planes//2, in_planes//4, 3, 1, 1, has_drop=True)
+        self.decoder_t4_3 = ConvBnRelu(in_planes//4, in_planes//8, 3, 1, 1)
+
+        self.decoder_t5_1 = ConvBnRelu(in_planes//4, in_planes//4, 3, 1, 1, has_drop=True)
+        self.decoder_t5_2 = ConvBnRelu(in_planes//4, 64, 3, 1, 1, has_drop=True)
+        self.decoder_t5_3 = ConvBnRelu(64, 64, 3, 1, 1)
+        self.decoder_out = nn.Conv2d(64, class_num, 3, 1, 1)
+        self.concat = Concat(1)
+
+        self.trans_conv1 = nn.ConvTranspose2d(in_planes+in_planes // 2, in_planes+in_planes // 2, kernel_size=2, stride=2)
+        self.trans_conv2 = nn.ConvTranspose2d(in_planes ,in_planes,  kernel_size=2, stride=2)
+        self.trans_conv3 = nn.ConvTranspose2d(in_planes//2, in_planes//2, kernel_size=2, stride=2)
+        self.trans_conv4 = nn.ConvTranspose2d(in_planes//4, in_planes//4, kernel_size=2, stride=2)
+
+        self.upscore16 = nn.Upsample(scale_factor=16, mode='bilinear')
+        self.upscore8 = nn.Upsample(scale_factor=8, mode='bilinear')
+        self.upscore4 = nn.Upsample(scale_factor=4, mode='bilinear')
+        self.upscore2 = nn.Upsample(scale_factor=2, mode='bilinear')
+        # --------mutil-supervise--------------
+        self.outside_1 = nn.Conv2d(in_planes // 2, class_num, 3, 1, 1)
+        self.outside_2 = nn.Conv2d(in_planes // 2, class_num, 3, 1, 1)
+        self.outside_3 = nn.Conv2d(in_planes // 4, class_num, 3, 1, 1)
+        self.outside_4 = nn.Conv2d(in_planes // 8, class_num, 3, 1, 1)
+
+    def forward(self, out):
+        d1 = self.decoder_t1_3(self.decoder_t1_2(self.decoder_t1_1(out[4])))
+        d1_out = self.outside_1(self.upscore16(d1))
+        d2 = self.decoder_t2_3(
+            self.decoder_t2_2(self.decoder_t2_1(self.trans_conv1(self.concat([d1, out[3]])))))
+        d2_out = self.outside_2(self.upscore8(d2))
+        d3 = self.decoder_t3_3(
+            self.decoder_t3_2(self.decoder_t3_1(self.trans_conv2(self.concat([d2, out[2]])))))
+        d3_out = self.outside_3(self.upscore4(d3))
+        d4 =  self.decoder_t4_3(
+            self.decoder_t4_2(self.decoder_t4_1(self.trans_conv3(self.concat([d3, out[1]])))))
+        d4_out = self.outside_4(self.upscore2(d4))
+        dout = self.decoder_out(self.decoder_t5_3(
+            self.decoder_t5_2(self.decoder_t5_1(self.trans_conv4(self.concat([d4, out[0]]))))))
         return d1_out,d2_out,d3_out,d4_out,dout
 class FDAFFM_sig(nn.Module):
     def __init__(self, in_planes, ratio = 4 , kernel_size = 3):
@@ -643,6 +782,265 @@ class FDAFFNet_l(nn.Module):
         self.trans_conv2 = nn.ConvTranspose2d(256, 256, kernel_size=2, stride=2)
         self.trans_conv3 = nn.ConvTranspose2d(128, 128, kernel_size=2, stride=2)
         self.trans_conv4 = nn.ConvTranspose2d(64, 64, kernel_size=2, stride=2)
+        # self.trans_conv1 = nn.Upsample(scale_factor=2, mode='bilinear')
+        # self.trans_conv2 = nn.Upsample(scale_factor=2, mode='bilinear')
+        # self.trans_conv3 = nn.Upsample(scale_factor=2, mode='bilinear')
+        # self.trans_conv4 = nn.Upsample(scale_factor=2, mode='bilinear')
+
+        self.upscore16 = nn.Upsample(scale_factor=16, mode='bilinear')
+        self.upscore8 = nn.Upsample(scale_factor=8, mode='bilinear')
+        self.upscore4 = nn.Upsample(scale_factor=4, mode='bilinear')
+        self.upscore2 = nn.Upsample(scale_factor=2, mode='bilinear')
+        # --------mutil-supervise--------------
+        self.outside_1 = nn.Conv2d(512, 1, 3,1,1)
+        self.outside_2 = nn.Conv2d(256, 1, 3,1,1)
+        self.outside_3 = nn.Conv2d(128, 1, 3,1,1)
+        self.outside_4 = nn.Conv2d(64, 1, 3,1,1)
+
+    def forward(self, x1, x2):
+        ##-----------X1------------
+        x1_MAP0 = self.encoder1(self.e1(x1))
+        x1_MAP1 = self.encoder2(x1_MAP0)
+        x1_MAP2 = self.encoder3(x1_MAP1)
+        x1_MAP3 = self.encoder4(x1_MAP2)
+        x1_MAP4 = self.d(self.SPPF_1(x1_MAP3))
+
+        ##-----------X2------------
+        x2_MAP0 = self.encoder1(self.e1(x2))
+        x2_MAP1 = self.encoder2(x2_MAP0)
+        x2_MAP2 = self.encoder3(x2_MAP1)
+        x2_MAP3 = self.encoder4(x2_MAP2)
+        x2_MAP4 = self.d(self.SPPF_1(x2_MAP3))
+
+        # -----Fusion-----
+        '''
+        fusion_feature_0 = self.concat([x1_MAP0, x2_MAP0])
+
+        fusion_feature_1 = self.concat([x1_MAP1,x2_MAP1])
+
+        fusion_feature_2 = self.concat([x1_MAP2,x2_MAP2])
+
+        fusion_feature_3 = self.concat([x1_MAP3,x2_MAP3])
+
+        fusion_feature_4 = self.concat([x1_MAP4,x2_MAP4])
+        '''
+
+        fusion_feature_0 = self.CDS0(x1_MAP0, x2_MAP0)
+
+        fusion_feature_1 = self.CDS1(x1_MAP1, x2_MAP1)
+
+        fusion_feature_2 = self.CDS2(x1_MAP2, x2_MAP2)
+
+        fusion_feature_3 = self.CDS3(x1_MAP3, x2_MAP3)
+
+        fusion_feature_4 = self.CDS4(x1_MAP4, x2_MAP4)
+        # ------decoder-tranconv------
+        d1 = self.decoder_t1_3(self.decoder_t1_2(self.decoder_t1_1(fusion_feature_4)))
+        d1_out = self.outside_1(self.upscore16(d1))
+        d2 = self.decoder_t2_3(self.decoder_t2_2(self.decoder_t2_1(self.concat([self.trans_conv1(d1), fusion_feature_3]))))
+        d2_out = self.outside_2(self.upscore8(d2))
+        d3 = self.decoder_t3_3(self.decoder_t3_2(self.decoder_t3_1(self.concat([self.trans_conv2(d2), fusion_feature_2]))))
+        d3_out = self.outside_3(self.upscore4(d3))
+        d4 = self.decoder_t4_3(self.decoder_t4_2(self.decoder_t4_1(self.concat([self.trans_conv3(d3), fusion_feature_1]))))
+        d4_out = self.outside_4(self.upscore2(d4))
+        dout = self.decoder_out(self.decoder_t5_3(self.decoder_t5_2(self.decoder_t5_1(self.concat([self.trans_conv4(d4), fusion_feature_0])))))
+        #dout = self.decoder_out(self.decoder_t5_3(self.decoder_t5_2(self.decoder_t5_1(self.trans_conv4(d4)))))
+        return  d1_out, d2_out, d3_out, d4_out, dout
+class FDAFFNet_outputda(nn.Module):
+    # n_channels: input image channels
+    def __init__(self, n_channels=3, norm_layer=nn.BatchNorm2d):
+        super(FDAFFNet_outputda, self).__init__()
+        # self.shape = shape
+        # resnet = models.resnet34(pretrained=False)
+        resnet = models.resnet34(pretrained=True)
+        ## -------------Feature Etraction--------------
+
+        self.e1 = Conv(3, 64, 3, 1, 1)
+        # stage 1
+        self.encoder1 = resnet.layer1  # 256^2*64
+        # stage 2
+        self.encoder2 = resnet.layer2  # 128^2*128
+        # stage 3
+        self.encoder3 = resnet.layer3  # 64^2*256
+        # stage 4
+        self.encoder4 = resnet.layer4  # 32^2*512
+
+        self.SPPF_1 = SPPF(512,512,3)
+        self.d = Conv(512, 512, 3, 2, 1)
+        ## -----------diffusion-------------
+        self.concat = Concat(1)
+        self.sigmoid = nn.Sigmoid()
+
+        self.CDS0 = FDAFFM_outputda(64)
+        self.CDS1 = FDAFFM_outputda(128)
+        self.CDS2 = FDAFFM_outputda(256)
+        self.CDS3 = FDAFFM_outputda(512)
+        self.CDS4 = FDAFFM_outputda(512)
+        ## -------------decoder--------------
+        self.decoder_t1_1 = ConvBnRelu(1024, 512, 3, 1, 1)
+        self.decoder_t1_2 = ConvBnRelu(512, 512, 3, 1, 1)
+        self.decoder_t1_3 = ConvBnRelu(512, 512, 3, 1, 1)
+
+        self.decoder_t2_1 = ConvBnRelu(1024 +512, 512, 3, 1, 1)
+        self.decoder_t2_2 = ConvBnRelu(512, 256, 3, 1, 1)
+        self.decoder_t2_3 = ConvBnRelu(256, 256, 3, 1, 1)
+
+        self.decoder_t3_1 = ConvBnRelu(256 + 512, 256, 3, 1, 1)
+        self.decoder_t3_2 = ConvBnRelu(256, 128, 3, 1, 1)
+        self.decoder_t3_3 = ConvBnRelu(128, 128, 3, 1, 1)
+
+        self.decoder_t4_1 = ConvBnRelu(128 + 256, 128, 3, 1, 1)
+        self.decoder_t4_2 = ConvBnRelu(128, 64, 3, 1, 1)
+        self.decoder_t4_3 = ConvBnRelu(64, 64, 3, 1, 1)
+
+        self.decoder_t5_1 = ConvBnRelu(64 +128, 64, 3, 1, 1)
+        self.decoder_t5_2 = ConvBnRelu(64, 64, 3, 1, 1)
+        self.decoder_t5_3 = ConvBnRelu(64, 64, 3, 1, 1)
+
+        self.decoder_out = nn.Conv2d(64, 1, 3, 1, 1)
+        '''
+        self.decoder_t5_1 = ConvBnRelu(64, 32, 3, 1, 1, has_drop=True)
+        self.decoder_t5_2 = ConvBnRelu(32, 32, 3, 1, 1, has_drop=True)
+        self.decoder_t5_3 = ConvBnRelu(32, 32, 3, 1, 1)
+        self.decoder_out = nn.Conv2d(32, 1, 3, 1, 1)'''
+
+
+        #
+        ## -------------Bilinear Upsampling--------------
+        self.trans_conv1 = nn.ConvTranspose2d(512, 512, kernel_size=2, stride=2)
+        self.trans_conv2 = nn.ConvTranspose2d(256, 256, kernel_size=2, stride=2)
+        self.trans_conv3 = nn.ConvTranspose2d(128, 128, kernel_size=2, stride=2)
+        self.trans_conv4 = nn.ConvTranspose2d(64, 64, kernel_size=2, stride=2)
+        #self.trans_conv1 = nn.Upsample(scale_factor=2, mode='bilinear')
+        #self.trans_conv2 = nn.Upsample(scale_factor=2, mode='bilinear')
+        #self.trans_conv3 = nn.Upsample(scale_factor=2, mode='bilinear')
+        #self.trans_conv4 = nn.Upsample(scale_factor=2, mode='bilinear')
+
+        self.upscore16 = nn.Upsample(scale_factor=16, mode='bilinear')
+        self.upscore8 = nn.Upsample(scale_factor=8, mode='bilinear')
+        self.upscore4 = nn.Upsample(scale_factor=4, mode='bilinear')
+        self.upscore2 = nn.Upsample(scale_factor=2, mode='bilinear')
+        # --------mutil-supervise--------------
+        self.outside_1 = nn.Conv2d(512, 1, 3,1,1)
+        self.outside_2 = nn.Conv2d(256, 1, 3,1,1)
+        self.outside_3 = nn.Conv2d(128, 1, 3,1,1)
+        self.outside_4 = nn.Conv2d(64, 1, 3,1,1)
+
+    def forward(self, x1, x2):
+        ##-----------X1------------
+        x1_MAP0 = self.encoder1(self.e1(x1))
+        x1_MAP1 = self.encoder2(x1_MAP0)
+        x1_MAP2 = self.encoder3(x1_MAP1)
+        x1_MAP3 = self.encoder4(x1_MAP2)
+        x1_MAP4 = self.d(self.SPPF_1(x1_MAP3))
+
+        ##-----------X2------------
+        x2_MAP0 = self.encoder1(self.e1(x2))
+        x2_MAP1 = self.encoder2(x2_MAP0)
+        x2_MAP2 = self.encoder3(x2_MAP1)
+        x2_MAP3 = self.encoder4(x2_MAP2)
+        x2_MAP4 = self.d(self.SPPF_1(x2_MAP3))
+
+        # -----Fusion-----
+        '''
+        fusion_feature_0 = self.concat([x1_MAP0, x2_MAP0])
+
+        fusion_feature_1 = self.concat([x1_MAP1,x2_MAP1])
+
+        fusion_feature_2 = self.concat([x1_MAP2,x2_MAP2])
+
+        fusion_feature_3 = self.concat([x1_MAP3,x2_MAP3])
+
+        fusion_feature_4 = self.concat([x1_MAP4,x2_MAP4])
+        '''
+
+        da0,fusion_feature_0 = self.CDS0(x1_MAP0, x2_MAP0)
+
+        da1,fusion_feature_1 = self.CDS1(x1_MAP1, x2_MAP1)
+
+        da2,fusion_feature_2 = self.CDS2(x1_MAP2, x2_MAP2)
+
+        da3,fusion_feature_3 = self.CDS3(x1_MAP3, x2_MAP3)
+
+        da4,fusion_feature_4 = self.CDS4(x1_MAP4, x2_MAP4)
+        # ------decoder-tranconv------
+        d1 = self.decoder_t1_3(self.decoder_t1_2(self.decoder_t1_1(fusion_feature_4)))
+        d1_out = self.outside_1(self.upscore16(d1))
+        d2 = self.decoder_t2_3(self.decoder_t2_2(self.decoder_t2_1(self.concat([self.trans_conv1(d1), fusion_feature_3]))))
+        d2_out = self.outside_2(self.upscore8(d2))
+        d3 = self.decoder_t3_3(self.decoder_t3_2(self.decoder_t3_1(self.concat([self.trans_conv2(d2), fusion_feature_2]))))
+        d3_out = self.outside_3(self.upscore4(d3))
+        d4 = self.decoder_t4_3(self.decoder_t4_2(self.decoder_t4_1(self.concat([self.trans_conv3(d3), fusion_feature_1]))))
+        d4_out = self.outside_4(self.upscore2(d4))
+        dout = self.decoder_out(self.decoder_t5_3(self.decoder_t5_2(self.decoder_t5_1(self.concat([self.trans_conv4(d4), fusion_feature_0])))))
+        #dout = self.decoder_out(self.decoder_t5_3(self.decoder_t5_2(self.decoder_t5_1(self.trans_conv4(d4)))))
+        return da0, da1, da2, da3, da4
+        #return  d1_out, d2_out, d3_out, d4_out, dout
+class FDAFFNet_lite(nn.Module):
+    # n_channels: input image channels
+    def __init__(self, n_channels=3, norm_layer=nn.BatchNorm2d):
+        super(FDAFFNet_lite, self).__init__()
+        # self.shape = shape
+        # resnet = models.resnet34(pretrained=False)
+        resnet = models.resnet18(pretrained=True)
+        ## -------------Feature Etraction--------------
+
+        self.e1 = Conv(3, 64, 3, 1, 1)
+        # stage 1
+        self.encoder1 = resnet.layer1  # 256^2*64
+        # stage 2
+        self.encoder2 = resnet.layer2  # 128^2*128
+        # stage 3
+        self.encoder3 = resnet.layer3  # 64^2*256
+        # stage 4
+        self.encoder4 = resnet.layer4  # 32^2*512
+
+        self.SPPF_1 = SPPF(512,512,3)
+        self.d = Conv(512, 512, 3, 2, 1)
+        ## -----------diffusion-------------
+        self.concat = Concat(1)
+        self.sigmoid = nn.Sigmoid()
+
+        # self.CDS0 = FDAFFM(64)
+        # self.CDS1 = FDAFFM(128)
+        # self.CDS2 = FDAFFM(256)
+        # self.CDS3 = FDAFFM(512)
+        # self.CDS4 = FDAFFM(512)
+        ## -------------decoder--------------
+        self.decoder_t1_1 = ConvBnRelu(1024, 512, 3, 1, 1)
+        self.decoder_t1_2 = ConvBnRelu(512, 512, 3, 1, 1)
+        self.decoder_t1_3 = ConvBnRelu(512, 512, 3, 1, 1)
+
+        self.decoder_t2_1 = ConvBnRelu(1024 +512, 512, 3, 1, 1)
+        self.decoder_t2_2 = ConvBnRelu(512, 256, 3, 1, 1)
+        self.decoder_t2_3 = ConvBnRelu(256, 256, 3, 1, 1)
+
+        self.decoder_t3_1 = ConvBnRelu(256 + 512, 256, 3, 1, 1)
+        self.decoder_t3_2 = ConvBnRelu(256, 128, 3, 1, 1)
+        self.decoder_t3_3 = ConvBnRelu(128, 128, 3, 1, 1)
+
+        self.decoder_t4_1 = ConvBnRelu(128 + 256, 128, 3, 1, 1)
+        self.decoder_t4_2 = ConvBnRelu(128, 64, 3, 1, 1)
+        self.decoder_t4_3 = ConvBnRelu(64, 64, 3, 1, 1)
+
+        self.decoder_t5_1 = ConvBnRelu(64 +128, 64, 3, 1, 1)
+        self.decoder_t5_2 = ConvBnRelu(64, 64, 3, 1, 1)
+        self.decoder_t5_3 = ConvBnRelu(64, 64, 3, 1, 1)
+
+        self.decoder_out = nn.Conv2d(64, 1, 3, 1, 1)
+        '''
+        self.decoder_t5_1 = ConvBnRelu(64, 32, 3, 1, 1, has_drop=True)
+        self.decoder_t5_2 = ConvBnRelu(32, 32, 3, 1, 1, has_drop=True)
+        self.decoder_t5_3 = ConvBnRelu(32, 32, 3, 1, 1)
+        self.decoder_out = nn.Conv2d(32, 1, 3, 1, 1)'''
+
+
+        #
+        ## -------------Bilinear Upsampling--------------
+        self.trans_conv1 = nn.Upsample(scale_factor=2, mode='bilinear')
+        self.trans_conv2 = nn.Upsample(scale_factor=2, mode='bilinear')
+        self.trans_conv3 = nn.Upsample(scale_factor=2, mode='bilinear')
+        self.trans_conv4 = nn.Upsample(scale_factor=2, mode='bilinear')
 
         self.upscore16 = nn.Upsample(scale_factor=16, mode='bilinear')
         self.upscore8 = nn.Upsample(scale_factor=8, mode='bilinear')
@@ -682,15 +1080,143 @@ class FDAFFNet_l(nn.Module):
         fusion_feature_4 = self.CDS4(x1_MAP4,x2_MAP4)
         '''
 
+        fusion_feature_0 = self.concat([x1_MAP0, x2_MAP0])
+
+        fusion_feature_1 = self.concat([x1_MAP1, x2_MAP1])
+
+        fusion_feature_2 = self.concat([x1_MAP2, x2_MAP2])
+
+        fusion_feature_3 = self.concat([x1_MAP3, x2_MAP3])
+
+        fusion_feature_4 = self.concat([x1_MAP4, x2_MAP4])
+        # ------decoder-tranconv------
+        d1 = self.decoder_t1_3(self.decoder_t1_2(self.decoder_t1_1(fusion_feature_4)))
+        d1_out = self.outside_1(self.upscore16(d1))
+        d2 = self.decoder_t2_3(self.decoder_t2_2(self.decoder_t2_1(self.concat([self.trans_conv1(d1), fusion_feature_3]))))
+        d2_out = self.outside_2(self.upscore8(d2))
+        d3 = self.decoder_t3_3(self.decoder_t3_2(self.decoder_t3_1(self.concat([self.trans_conv2(d2), fusion_feature_2]))))
+        d3_out = self.outside_3(self.upscore4(d3))
+        d4 = self.decoder_t4_3(self.decoder_t4_2(self.decoder_t4_1(self.concat([self.trans_conv3(d3), fusion_feature_1]))))
+        d4_out = self.outside_4(self.upscore2(d4))
+        dout = self.decoder_out(self.decoder_t5_3(self.decoder_t5_2(self.decoder_t5_1(self.concat([self.trans_conv4(d4), fusion_feature_0])))))
+        #dout = self.decoder_out(self.decoder_t5_3(self.decoder_t5_2(self.decoder_t5_1(self.trans_conv4(d4)))))
+        return  d1_out, d2_out, d3_out, d4_out, dout
+class FDAFFNet_v2(nn.Module):
+    # n_channels: input image channels
+    def __init__(self, n_channels=3, norm_layer=nn.BatchNorm2d):
+        super(FDAFFNet_v2, self).__init__()
+        # self.shape = shape
+        # resnet = models.resnet34(pretrained=False)
+        resnet = models.resnet34(pretrained=True)
+        ## -------------Feature Etraction--------------
+
+        self.e1 = Conv(3, 64, 3, 1, 1)
+        # stage 1
+        self.encoder1 = resnet.layer1  # 256^2*64
+        # stage 2
+        self.encoder2 = resnet.layer2  # 128^2*128
+        # stage 3
+        self.encoder3 = resnet.layer3  # 64^2*256
+        # stage 4
+        self.encoder4 = resnet.layer4  # 32^2*512
+
+        self.SPPF_1 = SPPF(512,512,3)
+        self.d = Conv(512, 512, 3, 2, 1)
+        ## -----------diffusion-------------
+        self.concat = Concat(1)
+        self.sigmoid = nn.Sigmoid()
+
+        self.DA = FDAFFM_v2_p1(256)
+
+        self.CDS0 = FDAFFM_v2_p2(64)
+        self.CDS1 = FDAFFM_v2_p2(128)
+        self.CDS2 = FDAFFM_v2_p2(256)
+        self.CDS3 = FDAFFM_v2_p2(512)
+        self.CDS4 = FDAFFM_v2_p2(512)
+        self.maxpool = nn.MaxPool2d(2)
+        ## -------------decoder--------------
+        self.decoder_t1_1 = ConvBnRelu(1024, 512, 3, 1, 1)
+        self.decoder_t1_2 = ConvBnRelu(512, 512, 3, 1, 1)
+        self.decoder_t1_3 = ConvBnRelu(512, 512, 3, 1, 1)
+
+        self.decoder_t2_1 = ConvBnRelu(1024 +512, 512, 3, 1, 1)
+        self.decoder_t2_2 = ConvBnRelu(512, 256, 3, 1, 1)
+        self.decoder_t2_3 = ConvBnRelu(256, 256, 3, 1, 1)
+
+        self.decoder_t3_1 = ConvBnRelu(256 + 512, 256, 3, 1, 1)
+        self.decoder_t3_2 = ConvBnRelu(256, 128, 3, 1, 1)
+        self.decoder_t3_3 = ConvBnRelu(128, 128, 3, 1, 1)
+
+        self.decoder_t4_1 = ConvBnRelu(128 + 256, 128, 3, 1, 1)
+        self.decoder_t4_2 = ConvBnRelu(128, 64, 3, 1, 1)
+        self.decoder_t4_3 = ConvBnRelu(64, 64, 3, 1, 1)
+
+        self.decoder_t5_1 = ConvBnRelu(64 +128, 64, 3, 1, 1)
+        self.decoder_t5_2 = ConvBnRelu(64, 64, 3, 1, 1)
+        self.decoder_t5_3 = ConvBnRelu(64, 64, 3, 1, 1)
+
+        self.decoder_out = nn.Conv2d(64, 1, 3, 1, 1)
+        '''
+        self.decoder_t5_1 = ConvBnRelu(64, 32, 3, 1, 1, has_drop=True)
+        self.decoder_t5_2 = ConvBnRelu(32, 32, 3, 1, 1, has_drop=True)
+        self.decoder_t5_3 = ConvBnRelu(32, 32, 3, 1, 1)
+        self.decoder_out = nn.Conv2d(32, 1, 3, 1, 1)'''
+
+
+        #
+        ## -------------Bilinear Upsampling--------------
+        self.trans_conv1 = nn.ConvTranspose2d(512, 512, kernel_size=2, stride=2)
+        self.trans_conv2 = nn.ConvTranspose2d(256, 256, kernel_size=2, stride=2)
+        self.trans_conv3 = nn.ConvTranspose2d(128, 128, kernel_size=2, stride=2)
+        self.trans_conv4 = nn.ConvTranspose2d(64, 64, kernel_size=2, stride=2)
+
+        self.upscore16 = nn.Upsample(scale_factor=16, mode='bilinear')
+        self.upscore8 = nn.Upsample(scale_factor=8, mode='bilinear')
+        self.upscore4 = nn.Upsample(scale_factor=4, mode='bilinear')
+        self.upscore2 = nn.Upsample(scale_factor=2, mode='bilinear')
+        # --------mutil-supervise--------------
+        self.outside_1 = nn.Conv2d(512, 1, 3,1,1)
+        self.outside_2 = nn.Conv2d(256, 1, 3,1,1)
+        self.outside_3 = nn.Conv2d(128, 1, 3,1,1)
+        self.outside_4 = nn.Conv2d(64, 1, 3,1,1)
+
+    def forward(self, x1, x2):
+        ##-----------X1------------
+        x1_MAP0 = self.encoder1(self.e1(x1))
+        x1_MAP1 = self.encoder2(x1_MAP0)
+        x1_MAP2 = self.encoder3(x1_MAP1)
+        x1_MAP3 = self.encoder4(x1_MAP2)
+        x1_MAP4 = self.d(self.SPPF_1(x1_MAP3))
+
+        ##-----------X2------------
+        x2_MAP0 = self.encoder1(self.e1(x2))
+        x2_MAP1 = self.encoder2(x2_MAP0)
+        x2_MAP2 = self.encoder3(x2_MAP1)
+        x2_MAP3 = self.encoder4(x2_MAP2)
+        x2_MAP4 = self.d(self.SPPF_1(x2_MAP3))
+
+        # -----Fusion-----
+        '''
         fusion_feature_0 = self.CDS0(x1_MAP0, x2_MAP0)
 
-        fusion_feature_1 = self.CDS1(x1_MAP1, x2_MAP1)
+        fusion_feature_1 = self.CDS1(x1_MAP1,x2_MAP1)
 
-        fusion_feature_2 = self.CDS2(x1_MAP2, x2_MAP2)
+        fusion_feature_2 = self.CDS2(x1_MAP2,x2_MAP2)
 
-        fusion_feature_3 = self.CDS3(x1_MAP3, x2_MAP3)
+        fusion_feature_3 = self.CDS3(x1_MAP3,x2_MAP3)
 
-        fusion_feature_4 = self.CDS4(x1_MAP4, x2_MAP4)
+        fusion_feature_4 = self.CDS4(x1_MAP4,x2_MAP4)
+        '''
+        DA = self.DA(x1_MAP2,x1_MAP3, x1_MAP4, x2_MAP2, x2_MAP3, x2_MAP4)
+        fusion_feature_0 = self.CDS0(x1_MAP0, x2_MAP0, DA)
+        DA = self.maxpool(DA)
+        fusion_feature_1 = self.CDS1(x1_MAP1, x2_MAP1, DA)
+        DA = self.maxpool(DA)
+        fusion_feature_2 = self.CDS2(x1_MAP2, x2_MAP2, DA)
+        DA = self.maxpool(DA)
+        fusion_feature_3 = self.CDS3(x1_MAP3, x2_MAP3, DA)
+        DA = self.maxpool(DA)
+        fusion_feature_4 = self.CDS4(x1_MAP4, x2_MAP4, DA)
         # ------decoder-tranconv------
         d1 = self.decoder_t1_3(self.decoder_t1_2(self.decoder_t1_1(fusion_feature_4)))
         d1_out = self.outside_1(self.upscore16(d1))
@@ -1427,8 +1953,8 @@ class FDAFFNet_Mobilev2(nn.Module):
         self.CDS3 = FDAFFM(96)
         self.CDS4 = FDAFFM(320)
         ## -------------decoder--------------
-        self.decoder_t1_1 = ConvBnRelu(640, 192, 3, 1, 1,has_drop=True)
-        self.decoder_t1_2 = ConvBnRelu(192, 192, 3, 1, 1,has_drop=True)
+        self.decoder_t1_1 = ConvBnRelu(640, 192, 3, 1, 1)
+        self.decoder_t1_2 = ConvBnRelu(192, 192, 3, 1, 1)
         self.decoder_t1_3 = ConvBnRelu(192, 192, 3, 1, 1)
 
         self.decoder_t2_1 = ConvBnRelu(192 +192, 192, 3, 1, 1,has_drop=True)
@@ -1763,4 +2289,3 @@ class FDAFFNet_test(nn.Module):
         o1 = self.CDS4(f1,f2)
         return self.output(o1)
         ##-----------X1-----------
-
