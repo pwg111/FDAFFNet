@@ -7,7 +7,7 @@ our paper [FDA-FFNet](https://ieeexplore.ieee.org/abstract/document/10365491).
 ### 1. Overview
 
 <p align="center">
-    <img width=500 src="img/model.tif"/> <br />
+    <img width=500 src="img/model.png"/> <br />
 </p>
 The proposed model follows an encoder-decoder structure, illustrated in Figure 1. The encoder is composed of a weight-sharing twin ResNet, SPPF, and FDA-FFM. On the other hand, the decoder, known as the change analysis network, utilizes using Stepwise upsampling convolutional networks and a DSAM to obtains the CD results. 
 
@@ -46,7 +46,7 @@ The proposed model follows an encoder-decoder structure, illustrated in Figure 1
     QUANTITATIVE COMPARISONS IN TERMS OF PRE, REC, IOU and F1 ON TWO RSCD DATASETS <font color="#FF0000">red</font> and <font color="#00B0F0">blue</font>, respectively.
     </em>
     <img src="img/benchmark_results.png"/> <br />
-    <img src="img/pred.tif"/> <br />
+    <img src="img/pred.png"/> <br />
     <em> 
     Visual comparisons of the proposed method and the state-of-the-art approaches on the LEVIR-CD and WHU-CD dataset. (a) t1 images. (b) t2 images. (c) Ground truth. (d) FC-Siam-Conc. (e) FC-Siam-Diff. (f) SNUNet. (g) DSFIN. (h) ChangeFormer. (i) A2-Net. (j) Ours. The rendered colors represent true positives (white), false positives (red), true negatives (black), and false negatives (blue).<font color="#FF0000">red</font> and <font color="#00B0F0">blue</font>
     </em>
